@@ -1,0 +1,9 @@
+# Fichiers exécutés sous Windows : CRLF à la sortie de dépôt, quelle que soit la plateforme.
+* text=auto
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.md   text eol=crlf
+*.py   text eol=lf
+
+# Console-CIS.ps1 est en UTF-8 AVEC BOM et doit le rester : PowerShell 5.1 lit un
+# .ps1 sans BOM en ANSI et casse les accents. Le moteur est en ASCII pur.

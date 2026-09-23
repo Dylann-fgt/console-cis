@@ -1,0 +1,14 @@
+# Sorties de tools/ (régénérables)
+tools/checks.json
+tools/rows.json
+tools/manual.json
+tools/tables.ps1
+__pycache__/
+
+# Mode portable : données d'un parc réel (profils, journal, scripts par poste)
+PORTABLE
+donnees/
+
+*.log
+Thumbs.db
+desktop.ini
