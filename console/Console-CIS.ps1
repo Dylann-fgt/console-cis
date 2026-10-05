@@ -58,7 +58,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
-$ConsoleVersion        = '1.1'
+$ConsoleVersion        = '1.2'
 $NoWindow              = [bool]$SelfTest
 $Dash                  = [string][char]0x2014
 
@@ -362,8 +362,21 @@ function Save-ExecutionTrace([datetime]$since) {
     # jamais Rollback.cmd — il n'a de sens que sur le poste, avec ses .reg.
     if (-not $script:IsPortable -or $script:PortableNote) { return $null }
     $root = Join-Path $env:ProgramData 'CIS-Console-Backup'
-    $b = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
-         Where-Object { $_.CreationTime -ge $since.AddSeconds(-5) } | Sort-Object CreationTime | Select-Object -Last 1
+    # v1.2 — le dossier des sauvegardes est fermé aux seuls administrateurs (voir
+    # $backupRoot plus bas) : une console NON élevée ne peut pas le lister. Ce refus
+    # était avalé par SilentlyContinue et devenait « aucune sauvegarde trouvée »,
+    # lu comme une application sans point de retour (POSTE-01, 26/09). On dit
+    # maintenant POURQUOI on ne trouve rien.
+    if (-not (Test-Path -LiteralPath $root)) { return $null }
+    try {
+        $all = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop)
+    } catch {
+        if ($_.Exception -is [UnauthorizedAccessException] -or $_.CategoryInfo.Category -eq 'PermissionDenied') {
+            return @{ Illisible = $true; Backup = $root }
+        }
+        return $null
+    }
+    $b = $all | Where-Object { $_.CreationTime -ge $since.AddSeconds(-5) } | Sort-Object CreationTime | Select-Object -Last 1
     if (-not $b) { return $null }
     $dst = Join-Path $script:OutDir ("execution-{0}" -f $b.Name)
     New-Item -ItemType Directory -Path $dst -Force | Out-Null
@@ -1975,7 +1988,10 @@ function Start-Watch($proc, $what) {
                 $msg = "$($script:WatchWhat) terminé — poste relu à $(Get-Date -Format 'HH:mm:ss')."
                 if ($script:WatchWhat -eq 'Application') {
                     $tr = Save-ExecutionTrace $script:WatchStart
-                    if ($tr) {
+                    if ($tr -and $tr.Illisible) {
+                        $msg += " Sauvegarde non vérifiable : $($tr.Backup) est réservé aux administrateurs et cette console n'est pas élevée. Rollback.cmd est sur le poste ; pour le constater, relancer la console en administrateur."
+                        Write-ParcLog 'application-relue' 'sauvegarde illisible : console non élevée (ProgramData\CIS-Console-Backup réservé aux administrateurs)'
+                    } elseif ($tr) {
                         $msg += " Résultat copié dans $($tr.Copy) ; Rollback.cmd reste sur le poste : $($tr.Backup)"
                         Write-ParcLog 'application-relue' $tr.Backup
                     } else { Write-ParcLog 'application-relue' 'aucune sauvegarde trouvée (fenêtre fermée avant écriture ?)' }
