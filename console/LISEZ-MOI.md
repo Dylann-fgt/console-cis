@@ -27,7 +27,7 @@ en cours.
 
 | Verrou | Dans la console | Dans le script généré |
 |---|---|---|
-| Liste noire (26269/26270/26443, + 26225-26230 en profil carte) | affiché, jamais sélectionnable | revérifiée avant toute écriture, arrêt code 2 |
+| Liste noire (en profil carte à puce : protection LSA 26269/26270 et VBS 26225-26230) | affiché, jamais sélectionnable | revérifiée avant toute écriture, arrêt code 2 |
 | Garde-fou dur (carte à puce, veille S3) | `Appliquer` absent ; `Retirer` seulement | — |
 | Garde-fou d'usage (imprimante, Bluetooth, BitLocker…) | permis, **confirmation qui les énumère** | — |
 | TIER 3 | affiché avec sa raison, pas d'action | — |
@@ -48,12 +48,20 @@ en cours.
 `Retirer` n'est proposé que sous une clé `…\Policies\…` (hors stratégie, l'absence d'une valeur ne
 veut pas dire « défaut ») ; retirer une valeur de stratégie déclenche `gpupdate /target:computer /force`.
 
-## Ce qui n'a pas été éprouvé
+## Ce qui a été éprouvé, et ce qui ne l'a pas été
 
-Mesuré le 2026-09-21 sur POSTE-01, session **non élevée** : inventaire (481 contrôles), score
-identique au moteur (404/447), génération, simulation, refus de `-Apply` sans élévation, refus
-liste noire (script retouché à la main → code 2), refus d'un autre poste (code 3), aller-retour
-d'un profil, rendu de la fenêtre. **Jamais exécuté avec `-Apply` en administrateur.**
+- **Application réelle en administrateur** : un poste Windows 11 (build 26200, en français,
+  session ouverte par carte à puce), en mode portable depuis un dossier local, les 26 et
+  27/09/2026 — cinq applications puis un retrait, score passé de **326 à 440/447**. C'est ce
+  passage qui a révélé le défaut corrigé en 1.2 (une console non élevée annonçait « aucune
+  sauvegarde » au lieu de « sauvegarde non vérifiable »).
+- **Sans élévation** : inventaire (481 contrôles), score identique au moteur, génération,
+  simulation, refus de `-Apply` sans élévation, refus liste noire (script retouché à la main →
+  code 2), refus d'un autre poste (code 3), aller-retour d'un profil, rendu de la fenêtre.
+- **Pas encore éprouvé** : le lancement depuis une clé USB (copie des traces sur la clé) et
+  depuis un lecteur réseau mappé (chemins traduits en UNC) ; et, plus largement, un **seul**
+  poste a reçu une application réelle — ni Windows en anglais, ni poste sans carte à puce, ni
+  poste membre d'un domaine.
 
 ## Vérifier sans fenêtre
 

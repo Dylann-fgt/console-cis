@@ -6,15 +6,11 @@
 #
 #  Pourquoi ce doublon : seule la GENERATION des tables (parse_sca.py,
 #  derive.py, gen_tables.py) a besoin de Python et du fichier de regles Wazuh.
-#  Modifier le MOTEUR ne demande que de recoller les morceaux -- et Python
-#  n'est pas installe sur tous les postes du parc. Les deux assembleurs
-#  produisent le meme fichier.
+#  Modifier le MOTEUR ne demande que de recoller les morceaux, sans Python.
+#  Les deux assembleurs produisent le meme fichier.
 #
 #  Les tables viennent de tools\tables.ps1 s'il existe, sinon du script deja
 #  assemble : on remplace le moteur autour d'elles sans les regenerer.
-#  Note : les correctifs de titre du controle 26202 sont appliques par
-#  assemble.py au moment d'une vraie regeneration ; ils sont donc deja dans
-#  les tables reprises ici.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
 
@@ -51,7 +47,7 @@ if (Test-Path $tablesFile) {
 $banner = @"
 
 # ============================ TABLES DE DONNEES ==========================
-#  Genere le 2026-07-25 par tools/ depuis
+#  Genere le 2026-10-12 par tools/ depuis
 #    C:\Program Files (x86)\ossec-agent\ruleset\sca\cis_win11_enterprise.yml
 #  (CIS Microsoft Windows 11 Enterprise Benchmark v3.0.0, 482 controles).
 #  Ne pas editer a la main : regenerer les tables et reassembler.

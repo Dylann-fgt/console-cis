@@ -5,6 +5,9 @@ tools/manual.json
 tools/tables.ps1
 __pycache__/
 
+# Archives de publication (tools/build-release.ps1)
+dist/
+
 # Mode portable : données d'un parc réel (profils, journal, scripts par poste)
 PORTABLE
 donnees/

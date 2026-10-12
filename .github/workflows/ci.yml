@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verifier:
+    name: Vérifications
+    runs-on: windows-latest
+    defaults:
+      run:
+        # Windows PowerShell 5.1 : la cible de l'outil, pas pwsh.
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntaxe de tous les scripts PowerShell
+        run: |
+          $bad = 0
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $e = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$e)
+            foreach ($x in $e) { $bad++; Write-Host "::error file=$($_.FullName),line=$($x.Extent.StartLineNumber)::$($x.Message)" }
+          }
+          if ($bad) { exit 1 }
+
+      - name: Encodages
+        run: |
+          # Le moteur et l'outillage restent en ASCII pur ; la console est en UTF-8
+          # AVEC BOM. PowerShell 5.1 lit un .ps1 sans BOM avec la page de code ANSI :
+          # un seul caractère accentué y casserait la tokenisation.
+          $bad = 0
+          $ascii = @('Harden-Windows-CIS.ps1') + @(Get-ChildItem tools -Filter *.ps1 | ForEach-Object { "tools\$($_.Name)" })
+          foreach ($f in $ascii) {
+            $b = [IO.File]::ReadAllBytes((Resolve-Path $f))
+            $n = @($b | Where-Object { $_ -gt 127 }).Count
+            if ($n) { $bad++; Write-Host "::error file=$f::$n octet(s) non ASCII" }
+          }
+          $c = [IO.File]::ReadAllBytes((Resolve-Path 'console\Console-CIS.ps1'))
+          if (-not ($c[0] -eq 0xEF -and $c[1] -eq 0xBB -and $c[2] -eq 0xBF)) { $bad++; Write-Host '::error file=console/Console-CIS.ps1::BOM UTF-8 absent' }
+          if ($bad) { exit 1 }
+
+      - name: Le moteur est exactement ce que ses sources assemblent
+        run: |
+          .\tools\assemble.ps1
+          git diff --exit-code -- Harden-Windows-CIS.ps1
+
+      - name: assemble.py produit le même fichier
+        run: |
+          Push-Location tools
+          python assemble.py
+          Pop-Location
+          git diff --exit-code -- Harden-Windows-CIS.ps1
+
+      - name: PSScriptAnalyzer (erreurs)
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Force -Scope CurrentUser }
+          $r = @(Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error)
+          $r | Format-Table RuleName, ScriptName, Line, Message -AutoSize -Wrap | Out-String -Width 220 | Write-Host
+          if ($r.Count) { exit 1 }
+
+      - name: Moteur -Verify (lecture seule)
+        run: .\Harden-Windows-CIS.ps1 -Verify
+
+      - name: Console -SelfTest (sans fenêtre)
+        run: .\console\Console-CIS.ps1 -SelfTest "$env:RUNNER_TEMP\selftest"
+
+      - name: Archive de publication
+        run: .\tools\build-release.ps1 -OutDir "$env:RUNNER_TEMP\dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: console-cis
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error

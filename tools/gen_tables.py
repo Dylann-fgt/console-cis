@@ -11,10 +11,12 @@ manual = json.load(open("manual.json", encoding="utf-8"))
 checks = {c["id"]: c for c in json.load(open("checks.json", encoding="utf-8"))}
 
 # ---------------------------------------------------------------- garde-fous
-# JAMAIS applique, quelles que soient les options : casse l'ouverture de
-# session par carte a puce (LSASS en Protected Process Light refuse tout
-# DLL/CSP non signe PPL).
-BLOCKED = {26269, 26270}
+# Liste noire STATIQUE : jamais appliquee, quelles que soient les options, sur
+# toute machine. Vide aujourd'hui. La protection LSA (26269, 26270) n'y est
+# plus : elle est en TIER 3 ci-dessous, et le moteur la bascule en liste noire
+# a l'execution quand le poste ouvre sa session par carte a puce
+# ($SmartCardForbiddenIds), comme le bloc VBS.
+BLOCKED = set()
 
 # ------------------------------------------------- resolutions manuelles
 # Chaque entree provient de la lecture directe de la regle Wazuh du YAML.
@@ -104,7 +106,7 @@ OVERRIDES = {
             "String", "", 1, "fve", "idem lecteurs amovibles."),
     # 26352 : hors du range 'fve' ci-dessous, il tombait en famille 'base' et
     # partait donc dans le TIER 1 sans garde-fou -- c'est ainsi qu'il avait
-    # coupe la webcam de POSTE-01 le 2026-07-21. Declare ici pour que la famille
+    # coupe la webcam d'un poste le 2026-07-21. Declare ici pour que la famille
     # 'camera' survive a une regeneration des tables depuis le YAML.
     26352: ("HKLM", r"SOFTWARE\Policies\Microsoft\Camera", "AllowCamera",
             "DWord", "0", 1, "camera",
@@ -185,6 +187,9 @@ TIER3 = {
     26228: "VBS : table d'attributs memoire UEFI requise.",
     26229: "VBS : Credential Guard avec verrou UEFI -- desactivation ulterieure impossible sans acces physique.",
     26230: "VBS : protection materielle de la pile en mode noyau.",
+    26269: "Protection LSA : interdit tout package d'authentification TIERS dans LSASS (middleware de carte a puce, certains SSO). Liste noire si le poste ouvre sa session par carte.",
+    26270: "Protection LSA : LSASS en processus protege avec verrou UEFI -- refuse tout module non signe PPL, et le verrou ne se retire pas sans acces physique. Liste noire si le poste ouvre sa session par carte.",
+    26443: "Store : le fait DISPARAITRE (plus d'installation ni de mise a jour d'applications du Store). Les autres controles 'store' du TIER 2 le brident deja.",
     26261: "LAPS : necessite Active Directory ou Entra ID.",
     26268: "LAPS : action post-authentification.",
     26317: "BitLocker : EXIGER une carte a puce sur les lecteurs fixes -- si la carte tombe en panne, volume inaccessible.",
@@ -343,7 +348,20 @@ for cid, why in sorted(TIER3.items()):
         cid, ps(ascii_only(checks[cid]["title"])[:150]), ps(ascii_only(why))))
 L.append(")")
 
-open("tables.ps1", "w", encoding="ascii", errors="replace").write("\n".join(L) + "\n")
+tables = "\n".join(L) + "\n"
+
+# 26202 n'a pas de titre dans le YAML (champ vide en amont) : on le renseigne
+# ici, apres la troncature a 150 caracteres. Ce correctif vivait dans
+# assemble.py, ce qui rendait les deux assembleurs differents des qu'un
+# tools/tables.ps1 existait.
+tables = tables.replace(
+    "Path='SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkProvider\\HardenedPaths'; Name='\\\\*\\NETLOGON'; Type='String'; Data='RequireMutualAuthentication=1, RequireIntegrity=1, RequirePrivacy=1'; Title=''",
+    "Path='SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkProvider\\HardenedPaths'; Name='\\\\*\\NETLOGON'; Type='String'; Data='RequireMutualAuthentication=1, RequireIntegrity=1, RequirePrivacy=1'; Title='Ensure ''Hardened UNC Paths'' is set to ''Enabled, with Require Mutual Authentication, Require Integrity and Require Privacy set for all NETLOGON and SYSVOL shares''.'")
+tables = tables.replace(
+    "Name='\\\\*\\SYSVOL'; Type='String'; Data='RequireMutualAuthentication=1, RequireIntegrity=1, RequirePrivacy=1'; Title=''",
+    "Name='\\\\*\\SYSVOL'; Type='String'; Data='RequireMutualAuthentication=1, RequireIntegrity=1, RequirePrivacy=1'; Title='Ensure ''Hardened UNC Paths'' -- partage SYSVOL.'")
+
+open("tables.ps1", "w", encoding="ascii", errors="replace", newline="\n").write(tables)
 
 print("registre :", len(regs), "( tier1 =", sum(1 for o in regs if o["tier"] == 1),
       ", tier2 =", sum(1 for o in regs if o["tier"] == 2),

@@ -1,6 +1,6 @@
 # Console CIS — version portable
 
-La même console que sur le poste (voir la page wiki `durcissement-cis-postes`, §6), mais qu'on
+La même console que sur le poste (voir `LISEZ-MOI.md`), mais qu'on
 **promène de poste en poste** sur une clé USB ou un partage réseau. Rien à installer : PowerShell
 5.1, livré avec Windows 10 et 11.
 
@@ -59,7 +59,8 @@ sans le fichier.
 
 ## Limites connues
 
-- **Jamais exécuté avec `-Apply` en administrateur**, ni sur poste ni en portable : la
-  simulation et les refus ont été éprouvés, l'application réelle non.
+- **Application réelle éprouvée sur un seul poste**, en mode portable depuis un dossier local
+  (26-27/09/2026, score 326 → 440/447). **Pas encore** depuis une clé USB, ni depuis un lecteur
+  réseau mappé : la copie des traces sur la clé et la traduction UNC sont écrites, pas éprouvées.
 - Un poste sous **AppLocker / WDAC** ou une stratégie qui interdit les scripts sur support
   amovible bloquera la console : c'est la stratégie qui fait foi, la console ne la contourne pas.

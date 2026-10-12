@@ -1,50 +1,77 @@
-﻿#Requires -Version 5.1
-<#
-============================================================================
- Console-CIS.ps1 — console graphique du durcissement CIS, sur mesure
+﻿<#
+.SYNOPSIS
+    Console graphique du durcissement CIS : voir chaque contrôle, choisir
+    ligne par ligne, générer un script sur mesure.
 
- Ce que fait la console
- ----------------------
-   1. Elle LIT le moteur Harden-Windows-CIS.ps1 : tables, liste noire,
-      garde-fous, profil de machine. Rien n'est recopié ici — les définitions
-      sont extraites du moteur par analyse syntaxique et exécutées telles
-      quelles. Quand le moteur change, la console suit.
-      Moteur cherché : -Engine <chemin>, sinon à côté de la console, sinon
-      dans le dossier parent.
-   2. Elle LIT LE POSTE : pour chaque contrôle, la valeur en place, la
-      conformité au sens de la règle Wazuh, et le garde-fou qui l'écarte.
-   3. Elle laisse CHOISIR, contrôle par contrôle : Appliquer, Retirer (retour
-      à « non configuré »), ou rien ; et ajuster une valeur cible.
-   4. Elle GÉNÈRE un script autonome, lié à ce poste, qui simule par défaut,
-      sauvegarde tout avant d'écrire (point de restauration, .reg, audit,
-      comptes, Rollback.cmd) et RELIT chaque réglage après.
+.DESCRIPTION
+    1. Elle LIT le moteur Harden-Windows-CIS.ps1 : tables, liste noire,
+       garde-fous, profil de machine. Rien n'est recopié ici — les définitions
+       sont extraites du moteur par analyse syntaxique et exécutées telles
+       quelles. Quand le moteur change, la console suit ; si un nom qu'elle
+       emprunte disparaît, elle refuse de démarrer.
+    2. Elle LIT LE POSTE : pour chaque contrôle, la valeur en place, la
+       conformité au sens de la règle Wazuh, et le garde-fou qui l'écarte.
+    3. Elle laisse CHOISIR, contrôle par contrôle : Appliquer, Retirer (retour
+       à « non configuré »), ou rien ; et ajuster une valeur cible.
+    4. Elle GÉNÈRE un script autonome, lié à ce poste, qui simule par défaut,
+       sauvegarde tout avant d'écrire (point de restauration, .reg, audit,
+       comptes, Rollback.cmd) et RELIT chaque réglage après.
 
- Ce qu'elle refuse, comme le moteur
- ----------------------------------
-   - la LISTE NOIRE (26269/26270/26443, + 26225-26230 en profil carte à
-     puce) : affichée, jamais sélectionnable, et revérifiée par le script
-     généré lui-même avant toute écriture ;
-   - les GARDE-FOUS DURS (carte à puce, veille) : « Appliquer » n'est pas
-     proposé — seul « Retirer » l'est, puisque c'est le sens qui répare ;
-   - le TIER 3 : affiché avec sa raison, décision humaine hors console.
- Les garde-fous d'USAGE (imprimante, webcam, Bluetooth…) peuvent être passés
- outre, après une confirmation qui les énumère.
+    Ce qu'elle refuse, comme le moteur :
+      - la LISTE NOIRE (protection LSA et VBS / Credential Guard sur un poste
+        qui ouvre sa session par carte à puce) : affichée, jamais
+        sélectionnable, et revérifiée par le script généré avant toute écriture ;
+      - les GARDE-FOUS DURS (carte à puce, veille) : « Appliquer » n'est pas
+        proposé — seul « Retirer » l'est, puisque c'est le sens qui répare ;
+      - le TIER 3 : affiché avec sa raison, décision humaine hors console.
+    Les garde-fous d'USAGE (imprimante, webcam, Bluetooth…) peuvent être passés
+    outre, après une confirmation qui les énumère.
 
- La console n'écrit rien sur le poste : elle écrit des scripts. Seul le
- bouton « Appliquer en administrateur » en exécute un, après confirmation.
+    La console n'écrit rien sur le poste : elle écrit des scripts. Seul le
+    bouton « Appliquer en administrateur » en exécute un, après confirmation.
 
- Mode portable (clé USB, partage réseau) : un fichier PORTABLE à côté de
- la console, ou -Portable. Profils partagés dans donnees\profils\ (le
- profil-parc.json y est préchargé à l'ouverture), scripts et traces de
- chaque poste dans donnees\postes\<POSTE>\, et un journal-parc.csv.
- Sauvegarde et Rollback.cmd restent SUR LE POSTE : la clé repart, le
- retour arrière non.
+    Mode portable (clé USB, partage réseau) : un fichier PORTABLE à côté de la
+    console, ou -Portable. Profils partagés dans donnees\profils\ (le
+    profil-parc.json y est préchargé à l'ouverture), scripts et traces de
+    chaque poste dans donnees\postes\<POSTE>\, et un journal-parc.csv.
+    Sauvegarde et Rollback.cmd restent SUR LE POSTE : la clé repart, le retour
+    arrière non.
 
- Paramètres de vérification (sans interaction) :
-   -SelfTest <dossier>  inventaire + script d'essai (présélection TIER 1+2)
-   -Snapshot <png>      rend la fenêtre hors écran dans une image
-============================================================================
+.PARAMETER Engine
+    Chemin de Harden-Windows-CIS.ps1. Par défaut : à côté de la console, sinon
+    dans le dossier parent.
+
+.PARAMETER Choix
+    Profil de choix (.json) à charger au démarrage.
+
+.PARAMETER SmartCardLogon
+    Impose le profil carte à puce (même sens que dans le moteur).
+
+.PARAMETER NoSmartCard
+    Déclare que le poste n'ouvre pas de session par carte (même sens que dans
+    le moteur).
+
+.PARAMETER Portable
+    Range profils, scripts et traces à côté de la console (sinon : présence
+    d'un fichier PORTABLE).
+
+.PARAMETER SelfTest
+    Sans fenêtre : inventaire, présélection TIER 1+2, aller-retour d'un profil
+    et script d'essai, écrits dans ce dossier.
+
+.PARAMETER Snapshot
+    Rend la fenêtre hors écran dans cette image PNG.
+
+.EXAMPLE
+    .\Console-CIS.cmd
+    Ouvre la console en lecture seule (double-clic).
+
+.EXAMPLE
+    .\Console-CIS.ps1 -SelfTest .\essai
+    Vérifie la console sans interface et écrit l'inventaire du poste.
 #>
+# #Requires vient APRÈS l'aide : placé avant, il la rend invisible à Get-Help.
+#Requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$Engine,          # chemin de Harden-Windows-CIS.ps1
@@ -58,7 +85,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
-$ConsoleVersion        = '1.2'
+$ConsoleVersion        = '1.3'
 $NoWindow              = [bool]$SelfTest
 $Dash                  = [string][char]0x2014
 
@@ -365,8 +392,8 @@ function Save-ExecutionTrace([datetime]$since) {
     # v1.2 — le dossier des sauvegardes est fermé aux seuls administrateurs (voir
     # $backupRoot plus bas) : une console NON élevée ne peut pas le lister. Ce refus
     # était avalé par SilentlyContinue et devenait « aucune sauvegarde trouvée »,
-    # lu comme une application sans point de retour (POSTE-01, 26/09). On dit
-    # maintenant POURQUOI on ne trouve rien.
+    # lu comme une application sans point de retour. On dit maintenant POURQUOI
+    # on ne trouve rien.
     if (-not (Test-Path -LiteralPath $root)) { return $null }
     try {
         $all = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop)
@@ -416,7 +443,7 @@ $StartLabels = @{
     'disabled' = 'Désactivé'; 'boot' = 'Démarrage'; 'system' = 'Système'
 }
 
-# Les « choix assumés » du moteur (wiki, §4) : la valeur retenue n'est pas
+# Les « choix assumés » du moteur : la valeur retenue n'est pas
 # la plus stricte que la règle tolère, et voici pourquoi.
 $Notes = @{
     26061 = "Choix du moteur : 1 = auditer. 2 = refuser le NTLM sortant — plus strict, mais coupe l'accès aux partages SMB/NAS hors domaine."
@@ -429,11 +456,13 @@ $Notes = @{
     26333 = "Avec 26332, BitLocker sur le volume système n'accepte plus que TPM+PIN, jamais TPM seul."
 }
 
-# Ce que relit la console pour afficher l'état d'un contrôle en liste noire.
-$BlockedProbe = @{
-    26269 = @{ Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\System';  Name = 'AllowCustomSSPsAPs' }
-    26270 = @{ Hive = 'HKLM'; Path = 'SYSTEM\CurrentControlSet\Control\Lsa';        Name = 'RunAsPPL' }
-    26443 = @{ Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\WindowsStore';    Name = 'RemoveWindowsStore' }
+# Ce que relit la console pour afficher l'état des contrôles absents des tables
+# du moteur — en TIER 3, ou en liste noire sur un poste à carte —, avec la
+# valeur attendue par la règle CIS.
+$ExtraProbe = @{
+    26269 = @{ Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\System';  Name = 'AllowCustomSSPsAPs'; Data = '0' }
+    26270 = @{ Hive = 'HKLM'; Path = 'SYSTEM\CurrentControlSet\Control\Lsa';        Name = 'RunAsPPL';           Data = '1' }
+    26443 = @{ Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\WindowsStore';    Name = 'RemoveWindowsStore'; Data = '1' }
 }
 
 $LockLabels = @{
@@ -701,19 +730,20 @@ function Add-OtherItems($list) {
 
     # -- TIER 3 : affiché, jamais automatisé
     foreach ($mm in $CisManual) {
-        $vbs = $CisVBS | Where-Object { $_.Id -eq $mm.Id } | Select-Object -First 1
+        $probe = $CisVBS | Where-Object { $_.Id -eq $mm.Id } | Select-Object -First 1
+        if (-not $probe -and $ExtraProbe.ContainsKey([int]$mm.Id)) { $probe = $ExtraProbe[[int]$mm.Id] }
         $cur = $Dash; $state = ''
-        if ($vbs) {
-            $rs = Read-RegState $vbs.Hive $vbs.Path $vbs.Name
+        if ($probe) {
+            $rs = Read-RegState $probe.Hive $probe.Path $probe.Name
             $cur = if ($rs.Readable) { Format-Val $rs.Value } else { '(illisible)' }
-            $state = if (-not $rs.Readable) { 'NR' } elseif ($rs.Exists -and "$($rs.Value)" -eq "$($vbs.Data)") { 'OK' } else { 'KO' }
+            $state = if (-not $rs.Readable) { 'NR' } elseif ($rs.Exists -and "$($rs.Value)" -eq "$($probe.Data)") { 'OK' } else { 'KO' }
         }
         $det = "Décision humaine : la console ne l'automatise pas."
         if ($mm.Id -eq 26011) { $det += "`nGet-LocalUser | Where-Object { `$_.SID -match '-500$' } | Rename-LocalUser -NewName <nom>" }
         if ($mm.Id -eq 26012) { $det += "`nGet-LocalUser | Where-Object { `$_.SID -match '-501$' } | Rename-LocalUser -NewName <nom>" }
         $list.Add((New-CisItem @{
             Key = "man:$($mm.Id)"; Code = 'man'; Id = $mm.Id; Kind = 'TIER 3'; Tier = '3'; Family = 'tier3'
-            Title = $mm.Title; Setting = $(if ($vbs) { "$($vbs.Hive)\$($vbs.Path)\$($vbs.Name)" } else { '' })
+            Title = $mm.Title; Setting = $(if ($probe) { "$($probe.Hive)\$($probe.Path)\$($probe.Name)" } else { '' })
             Current = $cur; State = $state; DefaultTarget = $Dash; Target = $Dash
             Lock = 'manuel'; Guard = $mm.Why; Choices = @($Dash); Detail = $det; Payload = $null
         }))
@@ -721,7 +751,7 @@ function Add-OtherItems($list) {
 
     # -- Liste noire effective (socle + extension carte à puce)
     foreach ($bb in $CisBlocked) {
-        $probe = if ($BlockedProbe.ContainsKey([int]$bb.Id)) { $BlockedProbe[[int]$bb.Id] } else { $CisVBS | Where-Object { $_.Id -eq $bb.Id } | Select-Object -First 1 }
+        $probe = if ($ExtraProbe.ContainsKey([int]$bb.Id)) { $ExtraProbe[[int]$bb.Id] } else { $CisVBS | Where-Object { $_.Id -eq $bb.Id } | Select-Object -First 1 }
         $cur = $Dash; $set = ''
         if ($probe) {
             $rs  = Read-RegState $probe.Hive $probe.Path $probe.Name
@@ -729,7 +759,7 @@ function Add-OtherItems($list) {
             $set = "$($probe.Hive)\$($probe.Path)\$($probe.Name)"
         }
         $why = if ($bb.Motif) { $bb.Motif }
-               elseif ($bb.Id -in 26269, 26270) { "Protection LSA : LSASS en Protected Process Light refuse de charger un CSP non signé PPL — l'ouverture de session par carte GIDS échouerait." }
+               elseif ($bb.Id -in 26269, 26270) { "Profil carte à puce : LSASS en processus protégé refuse de charger un module non signé PPL, et AllowCustomSSPsAPs = 0 interdit les packages tiers — l'ouverture de session par carte échouerait." }
                else { "Profil carte à puce : LSA isolé par l'hyperviseur ne charge aucun package d'authentification tiers, et le verrou UEFI ne se retire pas sans accès physique." }
         $list.Add((New-CisItem @{
             Key = "bl:$($bb.Id)"; Code = 'bl'; Id = $bb.Id; Kind = 'Liste noire'; Tier = $Dash; Family = 'liste-noire'
@@ -917,11 +947,11 @@ function Get-Plan {
         $warn.Add("Fenêtre d'observation ($($eff.lockoutwindow) min) plus longue que la durée de verrouillage ($($eff.lockoutduration) min) : net accounts risque de refuser.")
     }
 
-    # Vérifications propres à la console, en attendant que le moteur les porte
-    # (relevé du 2026-09-21) : ses garde-fous ne voient qu'une webcam en état OK
-    # — celle de POSTE-01, coupée par la touche de confidentialité HP, est en
-    # « Unknown » et passe donc inaperçue — et, pour Xbox, que les services
-    # Xbox Live, pas les accessoires. Ce sont des avertissements, pas des verrous.
+    # Vérifications propres à la console, en attendant que le moteur les porte :
+    # ses garde-fous ne voient qu'une webcam en état OK — une webcam coupée par
+    # une touche de confidentialité (HP) est en « Unknown » et passe donc
+    # inaperçue — et, pour Xbox, que les services Xbox Live, pas les
+    # accessoires. Ce sont des avertissements, pas des verrous.
     $pend = @{}
     foreach ($it in $script:Items) { if ($it.Action -eq 'Appliquer') { $pend[$it.Id] = $true } }
     if ($pend[26352] -or $pend[26112]) {
@@ -1503,9 +1533,15 @@ if ($SelfTest) {
     $plan.Err | ForEach-Object { Write-Host "  ERREUR $_" -ForegroundColor Red }
     $out = Save-GeneratedScript $plan (Join-Path $SelfTest ("selftest-{0}.ps1" -f $env:COMPUTERNAME))
     Write-Host "Script   : $out"
+    $pe = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($out, [ref]$null, [ref]$pe)
+    Write-Host ("Syntaxe  : script généré, {0} erreur(s)" -f @($pe).Count)
     Write-Host ''
     Write-Host (Get-PosteText)
-    exit 0
+    # Le code de sortie sert à la CI : un profil qui ne revient pas à l'identique,
+    # une erreur de plan ou un script généré invalide font échouer l'auto-test.
+    $fail = ($saved -ne $again) -or @($plan.Err).Count -or @($pe).Count
+    exit $(if ($fail) { 1 } else { 0 })
 }
 
 # ============================================================================

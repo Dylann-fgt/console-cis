@@ -2,8 +2,8 @@
 """Assemble Harden-Windows-CIS.ps1 = engine-head + tables + engine-tail.
 
 Se lance depuis ce dossier :   python assemble.py
-Ecrit dans le dossier PARENT (le workspace outils-cis), en chemin relatif :
-le coffre doit pouvoir etre deplace sans que rien ne casse.
+Ecrit dans le dossier PARENT, en chemin relatif : le dossier peut etre
+deplace sans que rien ne casse.
 """
 import io, os
 
@@ -44,18 +44,11 @@ def read_tables():
 head = rd("engine-head.ps1")
 tail = rd("engine-tail.ps1")
 tables, tables_src = read_tables()
-
-# 26202 n'a pas de titre dans le YAML (champ vide en amont) : on le renseigne.
-tables = tables.replace(
-    "Path='SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkProvider\\HardenedPaths'; Name='\\\\*\\NETLOGON'; Type='String'; Data='RequireMutualAuthentication=1, RequireIntegrity=1, RequirePrivacy=1'; Title=''",
-    "Path='SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkProvider\\HardenedPaths'; Name='\\\\*\\NETLOGON'; Type='String'; Data='RequireMutualAuthentication=1, RequireIntegrity=1, RequirePrivacy=1'; Title='Ensure ''Hardened UNC Paths'' is set to ''Enabled, with Require Mutual Authentication, Require Integrity and Require Privacy set for all NETLOGON and SYSVOL shares''.'")
-tables = tables.replace(
-    "Name='\\\\*\\SYSVOL'; Type='String'; Data='RequireMutualAuthentication=1, RequireIntegrity=1, RequirePrivacy=1'; Title=''",
-    "Name='\\\\*\\SYSVOL'; Type='String'; Data='RequireMutualAuthentication=1, RequireIntegrity=1, RequirePrivacy=1'; Title='Ensure ''Hardened UNC Paths'' -- partage SYSVOL.'")
+# Le titre de 26202 (vide dans le YAML) est renseigne par gen_tables.py.
 
 banner = """
 # ============================ TABLES DE DONNEES ==========================
-#  Genere le 2026-07-25 par tools/ depuis
+#  Genere le 2026-10-12 par tools/ depuis
 #    C:\\Program Files (x86)\\ossec-agent\\ruleset\\sca\\cis_win11_enterprise.yml
 #  (CIS Microsoft Windows 11 Enterprise Benchmark v3.0.0, 482 controles).
 #  Ne pas editer a la main : regenerer les tables et reassembler.

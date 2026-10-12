@@ -170,6 +170,29 @@ function Get-MachineProfile {
         $p.CameraNames = @($cam | ForEach-Object { $_.FriendlyName })
     } catch { }
 
+    # Etats de veille. Les controles 26281-26284 (famille 'sleep') supposent
+    # une machine a Modern Standby (S0), ou S1-S3 sont un chemin de repli mal
+    # protege. Sur un portable S3 CLASSIQUE -- S0 non pris en charge par le
+    # microprogramme -- 26283/26284 ne ferment pas une porte : ils suppriment
+    # la DERNIERE, et renvoient toute mise en veille sur la veille prolongee.
+    # Sur le poste qui l'a revele, ce chemin echouait une reprise sur trois en
+    # 0xC00000D4, ce qui jette les ecritures en cache de TOUS les volumes.
+    # On MESURE au lieu de supposer : powercfg /a. La sortie est localisee, on
+    # se repere donc sur la coupure entre etats disponibles et indisponibles,
+    # et on n'y cherche que 'S0' et 'S3'.
+    $p.SleepRead     = $false
+    $p.ModernStandby = $false
+    $p.SleepS3       = $false
+    try {
+        $pa = (& powercfg /a 2>$null) -join "`n"
+        if ($pa) {
+            $p.SleepRead     = $true
+            $dispo           = ($pa -split 'ne sont pas disponibles|are not available')[0]
+            $p.SleepS3       = [bool]($dispo -match 'S3')
+            $p.ModernStandby = [bool]($dispo -match 'S0')
+        }
+    } catch { }
+
     $lxss = Get-Service LxssManager -ErrorAction SilentlyContinue
     $p.WSL = [bool]($lxss -and $lxss.StartType -ne 'Disabled')
 
@@ -207,6 +230,7 @@ function Show-MachineProfile($m) {
     if ($m.HelloPin)         { $flags += 'code PIN Hello' }
     if ($m.Printers)         { $flags += 'imprimante' }
     if ($m.Camera)           { $flags += 'webcam' }
+    if ($m.SleepRead -and -not $m.ModernStandby) { $flags += 'veille S3 classique (pas de Modern Standby)' }
     if ($m.Bluetooth)        { $flags += 'Bluetooth' }
     if ($m.WSL)              { $flags += 'WSL' }
     if ($m.SSHD)             { $flags += 'serveur SSH' }
@@ -276,9 +300,13 @@ function Show-SmartCardStack($m) {
         Write-Host "    LSA reclame un package dont la DLL n'est pas la : la connexion par" -ForegroundColor Red
         Write-Host "    carte echouera au prochain demarrage. Reparer AVANT de durcir." -ForegroundColor Red
     }
-    Write-Host ("  Protection LSA (RunAsPPL) : {0}" -f $m.RunAsPPL) -ForegroundColor $(if ($m.RunAsPPL -eq 0) { 'Green' } else { 'Red' })
-    Write-Host ("  Credential Guard          : {0}" -f $(if ($m.CredGuardRunning) { 'EN COURS -- incompatible' } else { 'inactif' })) `
-        -ForegroundColor $(if ($m.CredGuardRunning) { 'Red' } else { 'Green' })
+    # Rouge = dangereux pour la carte. Hors profil carte, ces protections sont
+    # souhaitables : on les affiche sans jugement.
+    $card = [bool]$script:CardMode
+    Write-Host ("  Protection LSA (RunAsPPL) : {0}" -f $m.RunAsPPL) `
+        -ForegroundColor $(if (-not $card) { 'Gray' } elseif ($m.RunAsPPL -eq 0) { 'Green' } else { 'Red' })
+    Write-Host ("  Credential Guard          : {0}" -f $(if ($m.CredGuardRunning) { 'EN COURS' + $(if ($card) { ' -- incompatible' } else { '' }) } else { 'inactif' })) `
+        -ForegroundColor $(if (-not $card) { 'Gray' } elseif ($m.CredGuardRunning) { 'Red' } else { 'Green' })
     Write-Host ("  HVCI (integrite du code)  : {0}" -f $(if ($m.HvciRunning) { 'en cours' } else { 'inactif' })) -ForegroundColor DarkGray
     if ($script:CardMode -and $EnableVBS) {
         Write-Host "`nARRET : -EnableVBS demande sur un poste a connexion par carte." -ForegroundColor Red
@@ -299,6 +327,19 @@ function Test-GuardBlocks($guard, $fam, $m) {
     # l'acces a sa propre machine.
     if ($script:CardMode -and ($fam -eq 'vbs' -or $fam -eq 'smartcard' -or $guard -eq 'smartcard')) {
         return "profil carte a puce : isolerait LSA et casserait l'ouverture de session"
+    }
+    # Le garde-fou veille passe lui aussi AVANT -IgnoreGuards, et pour la meme
+    # raison que la carte a puce : ce qu'il previent n'est pas une gene
+    # d'usage, c'est une PERTE DE DONNEES silencieuse et irreversible. Sur un
+    # poste sans Modern Standby, 26283/26284 suppriment le dernier etat de
+    # veille et renvoient tout sur un chemin de reprise que personne n'a
+    # verifie. -IgnoreGuards accepte de casser un usage, pas de jeter les
+    # ecritures en cache de tous les volumes.
+    if ($fam -eq 'sleep' -and -not $m.ModernStandby) {
+        if ($m.SleepRead) {
+            return "pas de Modern Standby (S0) sur ce poste : 26283/26284 supprimeraient le DERNIER etat de veille et renverraient toute mise en veille sur la veille prolongee"
+        }
+        return "etats de veille illisibles (powercfg /a muet) : on ne retire pas un etat de veille sans savoir lequel reste"
     }
     if ($IgnoreGuards) { return $null }
     switch ($guard) {
@@ -347,7 +388,7 @@ $CisVBS = @(
 # Assertion : aucune table ne doit contenir un controle de la liste noire.
 # Elle est verifiee a CHAQUE execution -- une fois avec le socle, une seconde
 # fois avec l'extension carte a puce -- pour qu'une regeneration future des
-# tables ne puisse pas reintroduire 26269/26270 (ni 26225-26230) en silence.
+# tables ne puisse pas y reintroduire 26269/26270 ni 26225-26230 en silence.
 function Assert-NoForbiddenWrite {
     $bad = @()
     $tables = @($CisRegistry) + @($CisDelete)
@@ -397,9 +438,12 @@ function Compare-SafetySnapshot($before, $after) {
         if ($before[$k] -ne $after[$k]) { $drift += "$k : $($before[$k]) -> $($after[$k])" }
     }
     Write-Host "`n-- Verification des protections a preserver ----------------" -ForegroundColor Cyan
-    Write-Host ("  Protection LSA (RunAsPPL)   : {0}" -f $after.RunAsPPL) -ForegroundColor $(if ($after.RunAsPPL -eq 0) { 'Green' } else { 'Red' })
-    Write-Host ("  SSP/AP tiers dans LSASS     : {0}" -f $after.AllowCustomSSPsAPs) -ForegroundColor $(if ($after.AllowCustomSSPsAPs -ne 0) { 'Green' } else { 'Red' })
-    Write-Host ("  Credential Guard (LsaCfgFl.): {0}" -f $after.LsaCfgFlags) -ForegroundColor $(if ($after.LsaCfgFlags -eq 0) { 'Green' } else { 'Red' })
+    # Les couleurs jugent l'etat du point de vue de la carte a puce ; hors de ce
+    # profil, seul l'ecart avant/apres compte.
+    $card = [bool]$script:CardMode
+    Write-Host ("  Protection LSA (RunAsPPL)   : {0}" -f $after.RunAsPPL) -ForegroundColor $(if (-not $card) { 'Gray' } elseif ($after.RunAsPPL -eq 0) { 'Green' } else { 'Red' })
+    Write-Host ("  SSP/AP tiers dans LSASS     : {0}" -f $after.AllowCustomSSPsAPs) -ForegroundColor $(if (-not $card) { 'Gray' } elseif ($after.AllowCustomSSPsAPs -ne 0) { 'Green' } else { 'Red' })
+    Write-Host ("  Credential Guard (LsaCfgFl.): {0}" -f $after.LsaCfgFlags) -ForegroundColor $(if (-not $card) { 'Gray' } elseif ($after.LsaCfgFlags -eq 0) { 'Green' } else { 'Red' })
     Write-Host ("  Packages d'authentification : {0}" -f $after.AuthPackages)
     Write-Host ("  DLL de la carte presentes   : {0}" -f (@($after.EIDDlls -split '\|' | Where-Object { $_ }).Count))
     foreach ($s in @('SCardSvr','ScDeviceEnum','SCPolicySvc','CertPropSvc')) {
@@ -729,13 +773,22 @@ function Show-Skipped {
 
 function Show-Blocked {
     Write-Host "`n-- LISTE NOIRE : jamais appliques, sous aucune option -------" -ForegroundColor Magenta
-    foreach ($b in ($CisBlocked | Sort-Object { $_.Id })) { Write-Host ("  [{0}] {1}" -f $b.Id, $b.Title) -ForegroundColor Magenta }
-    Write-Host "  Motif : LSASS en Protected Process Light refuse de charger un CSP non" -ForegroundColor DarkGray
-    Write-Host "  signe pour PPL -> l'ouverture de session par carte a puce echoue." -ForegroundColor DarkGray
+    if (-not @($CisBlocked).Count) {
+        Write-Host "  Aucun controle : profil carte a puce inactif. La protection LSA et le" -ForegroundColor DarkGray
+        Write-Host "  bloc VBS / Credential Guard sont en TIER 3, a decider a la main." -ForegroundColor DarkGray
+        return
+    }
+    foreach ($b in ($CisBlocked | Sort-Object { $_.Id })) {
+        Write-Host ("  [{0}] {1}" -f $b.Id, $b.Title) -ForegroundColor Magenta
+        # Un motif propre au controle prime sur le motif collectif affiche plus
+        # bas, qui ne concerne que la carte a puce.
+        if ($b.Motif) { Write-Host ("         -> {0}" -f $b.Motif) -ForegroundColor DarkGray }
+    }
     if ($script:CardMode) {
-        Write-Host "  Le bloc VBS/Credential Guard (26225-26230) y est ajoute : profil carte" -ForegroundColor DarkGray
-        Write-Host "  a puce actif. LSA isole ne charge aucun package d'authentification" -ForegroundColor DarkGray
-        Write-Host "  tiers, et le verrou UEFI ne se retire pas sans acces physique." -ForegroundColor DarkGray
+        Write-Host "  Motif : profil carte a puce actif. LSASS en processus protege (26269," -ForegroundColor DarkGray
+        Write-Host "  26270) ou isole par l'hyperviseur (26225-26230) ne charge plus le package" -ForegroundColor DarkGray
+        Write-Host "  d'authentification de la carte -> l'ouverture de session par carte" -ForegroundColor DarkGray
+        Write-Host "  echoue, et le verrou UEFI ne se retire pas sans acces physique." -ForegroundColor DarkGray
     }
 }
 
@@ -796,7 +849,7 @@ if ($IncludeOptional) {
     Write-Host "  TIER 2  : inactif (-IncludeOptional pour l'ajouter)" -ForegroundColor DarkGray
 }
 Write-Host ("  TIER 3  : {0} controles, jamais automatises" -f $CisManual.Count) -ForegroundColor DarkGray
-Write-Host ("  Interdit: {0} controles en liste noire (protection LSA)" -f $CisBlocked.Count) -ForegroundColor Magenta
+Write-Host ("  Interdit: {0} controles en liste noire{1}" -f @($CisBlocked).Count, $(if ($script:CardMode) { ' (profil carte a puce)' } else { '' })) -ForegroundColor Magenta
 Show-Skipped
 
 if (-not $Apply) {

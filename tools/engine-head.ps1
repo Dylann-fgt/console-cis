@@ -1,108 +1,132 @@
-# ============================================================================
-#  Harden-Windows-CIS.ps1 -- Durcissement CIS Windows 11, version GENERALISEE
-#
-#  Successeur de Harden-CIS-Win11.ps1 (2026-07-21, taille pour POSTE-01) et de
-#  Finish-CIS-Win11.ps1 (2026-07-22). Reecrit le 2026-07-25 pour etre pose sur
-#  N'IMPORTE QUEL poste Windows 11, sans le connaitre a l'avance.
-#
-#  CE QUI CHANGE PAR RAPPORT A L'ANCIEN SCRIPT
-#  -------------------------------------------
-#  1. COUVERTURE COMPLETE. L'ancien script ne portait que les 361 controles
-#     REELLEMENT EN ECHEC sur POSTE-01 : les 115 qui y passaient deja n'y
-#     etaient pas, alors qu'ils peuvent echouer ailleurs. Les tables de ce
-#     script sont extraites des 482 controles du fichier de regles Wazuh
-#       C:\Program Files (x86)\ossec-agent\ruleset\sca\cis_win11_enterprise.yml
-#     (CIS Microsoft Windows 11 Enterprise Benchmark v3.0.0), c'est-a-dire
-#     du fichier que Wazuh utilise LUI-MEME pour verifier. Aucune valeur n'est
-#     devinee : chemin, nom et donnee sont repris textuellement de la regle.
-#
-#  2. PROFIL DE LA MACHINE. Le script commence par interroger le poste
-#     (imprimantes, Bluetooth, WSL, RDP, partages, BitLocker, compte
-#     Microsoft, domaine, lecteur de carte a puce...) et n'applique pas les
-#     controles qui casseraient un usage constate. Un controle ignore est
-#     ecrit dans le rapport avec sa raison, jamais passe sous silence.
-#
-#  3. DEUX GARDE-FOUS DURS, verifies AVANT et APRES l'execution :
-#       - la protection LSA (LSASS en Protected Process Light, RunAsPPL) n'est
-#         JAMAIS activee -- controles 26269 et 26270 mis en liste noire dans
-#         le code, pas seulement absents des tables ;
-#       - les services de la carte a puce (SCardSvr, ScDeviceEnum, SCPolicySvc,
-#         CertPropSvc) ne sont jamais desactives, et leur etat est compare
-#         avant/apres.
-#     Motif : le 2026-07-21, deux controles LSASS s'etaient glisses dans le
-#     palier automatique. LSASS en PPL refuse de charger un CSP non signe pour
-#     PPL -> l'ouverture de session par carte GIDS echoue. Un filtre par mot
-#     clef "smart card" ne suffit pas : ces controles parlent de "LSASS".
-#
-#  REVISION DU 2026-08-03 -- PROFIL "CARTE A PUCE"
-#  -----------------------------------------------
-#  Ce poste ouvre sa session Windows par carte a puce GIDS grace a un package
-#  d'authentification TIERS charge dans LSASS (EIDAuthenticate). TROIS reglages
-#  tuent cette pile, pas un seul :
-#    (a) RunAsPPL / RunAsPPLBoot -- LSASS en PPL refuse un CSP non signe PPL ;
-#    (b) AllowCustomSSPsAPs = 0  -- interdit explicitement le package tiers ;
-#    (c) LsaCfgFlags (Credential Guard, controle 26229) -- LSA isole par le
-#        hyperviseur ne charge AUCUN package d'authentification tiers, et le
-#        verrou UEFI ne se retire pas sans acces physique a la machine.
-#  (c) etait le trou de la version du 2026-07-25 : la liste noire ne portait
-#  que (a) et (b), pendant que -EnableVBS ecrivait LsaCfgFlags sans que rien
-#  ne s'y oppose. Un seul passage avec cette option et la carte ne rouvrait
-#  plus de session, avec un retour arriere bloque par le verrou UEFI.
-#  Depuis cette revision :
-#    - le profil carte a puce est DETECTE (DLL EID presentes ET packages
-#      declares dans HKLM\...\Control\Lsa), forcable par -SmartCardLogon et
-#      annulable par -NoSmartCard ;
-#    - quand il est actif, TOUT le bloc VBS/Credential Guard (26225-26230)
-#      passe en liste noire et -EnableVBS REFUSE de s'executer au lieu de
-#      casser la connexion ;
-#    - les trois listes de packages LSA sont elles aussi intouchables ;
-#    - l'instantane avant/apres couvre la pile complete : RunAsPPL,
-#      AllowCustomSSPsAPs, LsaCfgFlags, Credential Guard en cours, les 3 DLL
-#      EID, les 3 listes de packages et les 4 services de la carte.
-#  -Verify n'exige plus les droits administrateur : il ne fait que lire.
-#
-#  REVISION DU 2026-08-03 (soir) -- GARDE-FOU "WEBCAM"
-#  ----------------------------------------------------
-#  Le controle 26352 "Allow Use of Camera" ecrit AllowCamera = 0 et coupe la
-#  camera pour TOUTES les applications de la machine. Le symptome ne designe
-#  pas sa cause : l'application annonce qu'aucune camera n'est disponible,
-#  alors que le peripherique est en etat OK et que les autorisations de
-#  confidentialite sont sur "Autoriser". On cherche du cote du pilote, la
-#  cause est une strategie de groupe. Constate sur POSTE-01, ou l'ancien
-#  Harden-CIS-Win11.ps1 l'avait pose le 2026-07-21.
-#  26352 passe donc en famille 'camera' et sous garde-fou : il est ECARTE des
-#  qu'une webcam est reconnue par Windows, avec sa raison imprimee.
-#  -IgnoreGuards l'applique quand meme (poste sans usage video assume).
-#  Pour lever le blocage sur un poste deja durci : scripts/ (non publies) 
-#  debloquer-camera.ps1 -Apply.
-#
-#  4. INDEPENDANCE DE LA LANGUE. auditpol est adresse par GUID (l'appel par
-#     nom echoue en erreur 87 sur un Windows francais) et les comptes integres
-#     par SID (-500 / -501) plutot que par les noms "Administrator"/"Guest".
-#
-#  5. RETOUR ARRIERE REEL. La sauvegarde produit un Rollback.cmd pret a
-#     l'emploi qui reimporte toutes les cles exportees.
-#
-#  6. MODE VERIFICATION. -Verify relit le poste et calcule un score estime,
-#     sans Wazuh et sans rien modifier. Utile sur une machine ou l'agent n'est
-#     pas installe, ou pour mesurer avant/apres sans attendre le scan SCA.
-#
-#  PALIERS
-#  -------
-#    TIER 1  (-Apply)                  reglages sans effet visible sur l'usage
-#    TIER 2  (-Apply -IncludeOptional) services, ASR, Store, winget, veille,
-#                                      RDP, banniere... -> visible a l'usage
-#    TIER 3  (jamais automatique)      liste en fin de rapport, decision humaine
-#    LISTE NOIRE                       26269 / 26270 toujours ; + 26225-26230
-#                                      des que le profil carte a puce est actif
-#
-#  SECURITE DE L'OPERATION
-#    Sans -Apply : simulation pure, aucune ecriture.
-#    Avec -Apply : point de restauration + export .reg de toutes les cles
-#    touchees + Rollback.cmd, avant la moindre modification.
-#    PowerShell EN ADMINISTRATEUR obligatoire (pas d'auto-elevation).
-#    Plusieurs reglages ne prennent effet qu'apres REDEMARRAGE.
-# ============================================================================
+<#
+.SYNOPSIS
+    Durcissement CIS de Windows 11, avec garde-fous d'usage et retour arriere.
+
+.DESCRIPTION
+    Applique le CIS Microsoft Windows 11 Enterprise Benchmark v3.0.0 tel que le
+    verifie le module SCA de Wazuh (cis_win11_enterprise.yml, 482 controles).
+    Chemin, nom et donnee de chaque reglage sont repris textuellement de la
+    regle Wazuh : aucune valeur n'est devinee.
+
+    Sans -Apply, le script SIMULE : il lit le poste et dit ce qu'il ferait.
+    Avec -Apply, il sauvegarde AVANT d'ecrire (point de restauration, export
+    de chaque cle touchee, Rollback.cmd), applique, puis relit.
+
+    Avant d'agir, il dresse le profil de la machine (imprimante, Bluetooth,
+    webcam, WSL, serveur SSH, RDP, partages, BitLocker, compte Microsoft, code
+    PIN, domaine, carte a puce, etats de veille...) et ECARTE les controles
+    qui casseraient un usage constate. Chaque controle ecarte est imprime avec
+    sa raison : rien n'est passe sous silence.
+
+    PALIERS
+      TIER 1   -Apply                    reglages sans effet visible a l'usage
+      TIER 2   -Apply -IncludeOptional   services, ASR, Store, winget, veille,
+                                         RDP, banniere... visibles a l'usage
+      TIER 3   jamais automatique        liste en fin de rapport, avec la raison
+      Score    -ScoreOnly                controles qui font gagner du score en
+                                         degradant la securite reelle
+
+    GARDE-FOUS D'USAGE -- -IgnoreGuards passe outre
+      Imprimante, Bluetooth, webcam, WSL, SSH, RDP, partages, geolocalisation,
+      Xbox, notifications, BitLocker, LAPS, compte Microsoft, code PIN.
+
+    GARDE-FOUS DURS -- -IgnoreGuards ne les leve PAS
+      Carte a puce. Si le poste ouvre sa session par carte a puce grace a un
+        package d'authentification tiers (EIDAuthenticate), la protection LSA
+        (26269, 26270) et le bloc VBS / Credential Guard (26225-26230) passent
+        en LISTE NOIRE : LSASS en processus protege, ou isole par
+        l'hyperviseur, ne charge plus ce package, et le verrou UEFI ne se
+        retire pas sans acces physique. -EnableVBS refuse alors de tourner.
+        Hors de ce profil, ces controles sont en TIER 3.
+      Veille. Sur un poste sans Modern Standby (S0), 26281-26284 supprimeraient
+        le DERNIER etat de veille et renverraient toute mise en veille sur la
+        veille prolongee : une reprise ratee y jette les ecritures en cache.
+        Un etat de veille illisible bloque aussi.
+
+    La liste noire est verifiee a chaque execution : si une table la viole, le
+    script s'arrete avec le code 2 sans rien ecrire.
+
+    Independant de la langue de Windows : auditpol est adresse par GUID, les
+    comptes integres par SID (-500, -501).
+
+.PARAMETER Apply
+    Applique les changements. Sans lui : simulation, rien n'est ecrit.
+    Exige une PowerShell en administrateur (pas d'auto-elevation).
+
+.PARAMETER IncludeOptional
+    Ajoute le TIER 2 (services, ASR, Store, veille, RDP, banniere...).
+
+.PARAMETER Verify
+    Lit le poste et estime le score CIS, sans Wazuh et sans rien ecrire. Ne
+    demande pas l'elevation ; quelques cles et l'etat BitLocker restent alors
+    illisibles (BitLocker est suppose actif).
+
+.PARAMETER EnableVBS
+    Applique aussi le bloc VBS / Credential Guard (26225-26230), avec verrou
+    UEFI. Refuse (code 2) si le profil carte a puce est actif.
+
+.PARAMETER SmartCardLogon
+    Impose le profil carte a puce. Sans ce commutateur, il est detecte.
+
+.PARAMETER NoSmartCard
+    Declare que ce poste n'ouvre PAS de session par carte a puce, meme si un
+    lecteur est branche.
+
+.PARAMETER StrictNTLM
+    26061 : refuser le NTLM sortant (2) au lieu de l'auditer (1). Peut couper
+    l'acces aux partages SMB et aux NAS.
+
+.PARAMETER StrictNetBIOS
+    26192 : desactiver NetBIOS partout (0) au lieu des seuls reseaux publics
+    (2). Peut casser la decouverte de NAS et d'imprimantes.
+
+.PARAMETER ScoreOnly
+    Applique aussi les controles qui font gagner du score en degradant la
+    securite reelle (26389 : couper la protection cloud de Defender).
+
+.PARAMETER IgnoreGuards
+    Applique meme les controles qui casseraient un usage detecte. Ne leve pas
+    les garde-fous durs.
+
+.PARAMETER SkipFamily
+    Familles de controles a exclure, ex. -SkipFamily store,winget,sleep
+
+.PARAMETER KeepService
+    Services a ne jamais desactiver, en plus des services proteges.
+
+.PARAMETER LegalNoticeTitle
+    Titre de la banniere affichee avant l'ouverture de session (TIER 2).
+
+.PARAMETER LegalNoticeText
+    Texte de la banniere affichee avant l'ouverture de session (TIER 2).
+
+.EXAMPLE
+    .\Harden-Windows-CIS.ps1 -Verify
+    Score estime du poste ; rien n'est modifie.
+
+.EXAMPLE
+    .\Harden-Windows-CIS.ps1 -IncludeOptional
+    Simulation TIER 1 + 2 : ce qui serait applique, et ce qui serait ecarte.
+
+.EXAMPLE
+    .\Harden-Windows-CIS.ps1 -Apply
+    Applique le TIER 1, dans une PowerShell en administrateur. Redemarrer.
+
+.NOTES
+    Codes de sortie : 0 succes ; 1 -Apply sans droits administrateur ;
+    2 liste noire violee par une table, ou -EnableVBS sur un poste a carte.
+
+    Sauvegarde et journal : %LOCALAPPDATA%\CIS-Hardening-Backup\<date>\
+    (harden.log, exports .reg, Rollback.cmd). Plusieurs reglages ne prennent
+    effet qu'apres un redemarrage.
+
+    Ce fichier est ASSEMBLE par tools\assemble.ps1 a partir de
+    tools\engine-head.ps1, des tables et de tools\engine-tail.ps1 : on modifie
+    les sources, jamais ce fichier. Historique : CHANGELOG.md.
+#>
+# Aide ci-dessus : aucune ligne ne doit commencer par un point hors des
+# mots-cles (.SYNOPSIS...). PowerShell la prendrait pour un mot-cle inconnu
+# et ignorerait l'aide entiere, sans message.
 
 [CmdletBinding()]
 param(
@@ -125,9 +149,9 @@ param(
 # PAS de $ErrorActionPreference = "Stop" global : ce script enchaine des
 # commandes NATIVES (reg.exe, net.exe, auditpol.exe). Sous "Stop", une seule
 # d'entre elles ecrivant sur stderr leve une exception qui tue tout le script
-# sans message clair -- constate le 2026-07-21, la sauvegarde s'arretait apres
-# 8 cles des qu'une cle inexistante etait rencontree. Chaque etape sensible a
-# son propre try/catch avec -ErrorAction Stop explicite.
+# sans message clair -- la sauvegarde s'arretait ainsi apres quelques cles des
+# qu'une cle inexistante etait rencontree. Chaque etape sensible a son propre
+# try/catch avec -ErrorAction Stop explicite.
 $ErrorActionPreference = "Continue"
 $ProgressPreference    = "SilentlyContinue"
 
@@ -157,35 +181,39 @@ if (-not $isAdmin) {
 }
 
 # ============================ LISTE NOIRE ================================
-# Ces controles ne sont JAMAIS appliques, quelles que soient les options.
-# Ils sont declares ici, dans le code, et pas seulement absents des tables :
-# une regeneration future des tables ne peut pas les reintroduire par erreur
-# sans declencher l'assertion Assert-NoForbiddenWrite.
+# Ce qui figure ici n'est JAMAIS ecrit, quelles que soient les options. C'est
+# declare dans le code, et pas seulement absent des tables : une regeneration
+# future des tables ne peut pas le reintroduire par erreur sans declencher
+# l'assertion Assert-NoForbiddenWrite (arret, code 2).
 #
-# SOCLE -- vaut sur TOUTE machine, avec ou sans carte a puce. La protection
-# LSA reste desactivee sur ce parc : c'est une decision prise, pas un oubli.
-$ForbiddenIds = @(26269, 26270)
+# SOCLE -- vaut sur TOUTE machine. Aucun controle : seulement les trois listes
+# ou vivent les packages d'authentification de LSA. Aucun controle CIS ne les
+# ecrit aujourd'hui ; les declarer garantit qu'aucune regeneration future des
+# tables ne pourra les ecraser en silence. C'est leur alteration qui fait
+# tomber une ouverture de session par carte a puce.
+$ForbiddenIds = @()
 $ForbiddenValues = @(
-    @{ Hive='HKLM'; Path='SYSTEM\CurrentControlSet\Control\Lsa';                   Name='RunAsPPL' }
-    @{ Hive='HKLM'; Path='SYSTEM\CurrentControlSet\Control\Lsa';                   Name='RunAsPPLBoot' }
-    @{ Hive='HKLM'; Path='SOFTWARE\Policies\Microsoft\Windows\System';             Name='AllowCustomSSPsAPs' }
-    # Les trois listes ou vit le package d'authentification de la carte
-    # (EIDAuthenticationPackage / EIDPasswordChangeNotification). Aucun
-    # controle CIS ne les ecrit aujourd'hui ; les y mettre garantit qu'aucune
-    # regeneration future des tables ne pourra les ecraser en silence.
     @{ Hive='HKLM'; Path='SYSTEM\CurrentControlSet\Control\Lsa';                   Name='Authentication Packages' }
     @{ Hive='HKLM'; Path='SYSTEM\CurrentControlSet\Control\Lsa';                   Name='Security Packages' }
     @{ Hive='HKLM'; Path='SYSTEM\CurrentControlSet\Control\Lsa';                   Name='Notification Packages' }
 )
 
 # EXTENSION "CARTE A PUCE" -- ajoutee a l'execution par Set-SmartCardPolicy
-# des que le profil carte a puce est actif (detecte ou -SmartCardLogon).
-# Credential Guard isole LSA dans l'hyperviseur : un package d'authentification
-# TIERS n'y est plus charge du tout, et le verrou UEFI de 26229 ne se retire
-# pas sans acces physique. HVCI (26227) bloque en prime le chargement d'un
-# module non signe dans LSASS -- la pile OpenSC/EID n'y survit pas.
-$SmartCardForbiddenIds = @(26225, 26226, 26227, 26228, 26229, 26230)
+# des que le profil carte a puce est actif (detecte ou -SmartCardLogon). Hors
+# de ce profil, ces controles restent en TIER 3 : affiches, jamais automatises.
+#   - Protection LSA (26269, 26270). AllowCustomSSPsAPs = 0 interdit
+#     explicitement les packages d'authentification tiers ; LSASS en
+#     processus protege (RunAsPPL) refuse tout module non signe pour PPL. Dans
+#     les deux cas, le package de la carte n'est plus charge.
+#   - VBS / Credential Guard (26225-26230). LSA isole par l'hyperviseur ne
+#     charge aucun package d'authentification tiers, et le verrou UEFI de
+#     26229 ne se retire pas sans acces physique. HVCI (26227) bloque en prime
+#     le chargement d'un module non signe dans LSASS.
+$SmartCardForbiddenIds = @(26225, 26226, 26227, 26228, 26229, 26230, 26269, 26270)
 $SmartCardForbiddenValues = @(
+    @{ Hive='HKLM'; Path='SYSTEM\CurrentControlSet\Control\Lsa';            Name='RunAsPPL' }
+    @{ Hive='HKLM'; Path='SYSTEM\CurrentControlSet\Control\Lsa';            Name='RunAsPPLBoot' }
+    @{ Hive='HKLM'; Path='SOFTWARE\Policies\Microsoft\Windows\System';      Name='AllowCustomSSPsAPs' }
     @{ Hive='HKLM'; Path='SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'; Name='LsaCfgFlags' }
     @{ Hive='HKLM'; Path='SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'; Name='EnableVirtualizationBasedSecurity' }
     @{ Hive='HKLM'; Path='SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'; Name='RequirePlatformSecurityFeatures' }
@@ -194,23 +222,25 @@ $SmartCardForbiddenValues = @(
     @{ Hive='HKLM'; Path='SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'; Name='ConfigureKernelShadowStacksLaunch' }
 )
 
-# Les 3 DLL qui portent la connexion par carte sur un compte LOCAL. Leur
-# disparition avait mis la connexion par carte a terre le 2026-07-21 (un
-# desinstalleur tiers les avait emportees) : le script les releve avant et
-# apres, il ne les touche jamais.
+# Les 3 DLL qui portent la connexion par carte sur un compte LOCAL
+# (EIDAuthenticate). Leur disparition suffit a faire tomber la connexion par
+# carte -- un desinstalleur tiers les a deja emportees : le script les releve
+# avant et apres, il ne les touche jamais.
 $SmartCardDlls = @(
     'EIDAuthenticationPackage.dll',
     'EIDPasswordChangeNotification.dll',
     'EIDCredentialProvider.dll'
 )
-# Services indispensables a la carte a puce et a la supervision : jamais
-# desactives, meme si un futur CIS les listait.
+# Services jamais desactives, meme si un futur CIS les listait : la pile de la
+# carte a puce, et les agents de supervision (Wazuh ; SupervisionAgent est
+# l'agent d'un projet de supervision distinct). Un service absent du poste est
+# simplement ignore. -KeepService en ajoute d'autres.
 $NeverTouchServices = @(
     'SCardSvr',      # Carte a puce
     'ScDeviceEnum',  # Enumeration des peripheriques de carte a puce
     'SCPolicySvc',   # Strategie de retrait de la carte a puce
     'CertPropSvc',   # Propagation du certificat
-    'WazuhSvc',      # agent Wazuh (XDR)
+    'WazuhSvc',      # agent Wazuh
     'wazuh',
     'SupervisionAgent'
 ) + $KeepService
